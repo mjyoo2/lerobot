@@ -125,6 +125,7 @@ def train(cfg: TrainPipelineConfig):
     torch.backends.cuda.matmul.allow_tf32 = True
 
     logging.info("Creating dataset")
+
     dataset = make_dataset(cfg)
 
     # Create environment used for evaluating checkpoints during training on simulation data.

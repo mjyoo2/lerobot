@@ -30,7 +30,7 @@ pip install -e ".[pi0]"
 
 Example of finetuning the pi0 pretrained model (`pi0_base` in `openpi`):
 ```bash
-lerobot-train \
+python -m lerobot.scripts.train \
 --policy.path=lerobot/pi0 \
 --dataset.repo_id=danaaubakirova/koch_test
 ```
@@ -38,7 +38,7 @@ lerobot-train \
 Example of finetuning the pi0 neural network with PaliGemma and expert Gemma
 pretrained with VLM default parameters before pi0 finetuning:
 ```bash
-lerobot-train \
+python -m lerobot.scripts.train \
 --policy.type=pi0 \
 --dataset.repo_id=danaaubakirova/koch_test
 ```
@@ -298,10 +298,6 @@ class PI0Policy(PreTrainedPolicy):
             new_key = key
             for pattern, replacement in transformations:
                 new_key = pattern.sub(replacement, new_key)
-
-            if not new_key.startswith("model."):
-                new_key = f"model.{new_key}"
-
             transformed_dict[new_key] = value
 
         # Handle tied weights: lm_head.weight and embed_tokens.weight share memory
@@ -327,7 +323,6 @@ class PI0Policy(PreTrainedPolicy):
             )
             transformed_dict[lm_head_key] = transformed_dict[embed_tokens_key]
 
-
         return transformed_dict
 
     @classmethod
@@ -341,25 +336,8 @@ class PI0Policy(PreTrainedPolicy):
         # Load the state dict from file safely
         state_dict = load_file(model_file, device=map_location)
 
-        # khmin101: Remove normalization buffers from state_dict (smolvla구현 참고)
-        norm_keys = ("normalize_inputs", "normalize_targets", "unnormalize_outputs")
-        state_dict = {k: v for k, v in state_dict.items() if not k.startswith(norm_keys)}
-
         # Apply key transformations
         transformed_state_dict = cls._transform_state_dict_keys(state_dict)
-
-        # khmin101: state_dict diff 확인용 코드
-        # expected = set(model.state_dict().keys())
-        # incoming = set(transformed_state_dict.keys())
-        
-        # missing = sorted(expected - incoming)
-        # unexpected = sorted(incoming - expected)
-
-        # with open("state_dict_diff.txt", "w", encoding="utf-8") as f:
-        #     f.write("Missing keys:\n")
-        #     f.write("\n".join(missing))
-        #     f.write("\n\nUnexpected keys:\n")
-        #     f.write("\n".join(unexpected))
 
         # Load the transformed state dict
         msg = model.load_state_dict(transformed_state_dict, strict=strict)
@@ -384,35 +362,7 @@ class PI0Policy(PreTrainedPolicy):
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
         """Predict a chunk of actions given environment observations."""
-        try:
-            self.eval()
-
-            if self.config.adapt_to_pi_aloha:
-                batch[OBS_STATE] = self._pi_aloha_decode_state(batch[OBS_STATE])
-            
-            batch = self.normalize_inputs(batch)
-
-            images, img_masks = self.prepare_images(batch)
-            state = self.prepare_state(batch)
-            lang_tokens, lang_masks = self.prepare_language(batch)
-
-            actions = self.model.sample_actions(
-                images, img_masks, lang_tokens, lang_masks, state, noise=None
-            )
-
-            original_action_dim = self.config.action_feature.shape[0]
-            actions = actions[:, :, :original_action_dim]
-
-            actions = self.unnormalize_outputs({"action": actions})["action"]
-
-            if self.config.adapt_to_pi_aloha:
-                actions = self._pi_aloha_encode_actions(actions)
-
-            return actions
-        except Exception as e:
-            print(f"Error in predict_action_chunk: {e}")
-            raise NotImplementedError("Currently not implemented for PI0")
-        
+        raise NotImplementedError("Currently not implemented for PI0")
 
     @torch.no_grad()
     def select_action(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:

@@ -12,18 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Client side: The environment evolves with a time resolution equal to 1/fps"""
-
-DEFAULT_FPS = 30
-
-"""Server side: Running inference on (at most) 1/fps"""
-DEFAULT_INFERENCE_LATENCY = 1 / DEFAULT_FPS
-
-"""Server side: Timeout for observation queue in seconds"""
-DEFAULT_OBS_QUEUE_TIMEOUT = 2
-
-# All action chunking policies
-SUPPORTED_POLICIES = ["act", "smolvla", "diffusion", "pi0", "pi0fast", "tdmpc", "vqbet",  "heuristic"]
-
-# TODO: Add all other robots
-SUPPORTED_ROBOTS = ["so100_follower", "so101_follower"]
+from lerobot.scripts.server.policy_server import PolicyServer
+from lerobot.scripts.server.configs import PolicyServerConfig
