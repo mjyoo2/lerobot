@@ -116,6 +116,16 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         client_id = context.peer()
 
+        """
+        RemotePolicyConfig(
+            config.policy_type,
+            config.pretrained_name_or_path,
+            lerobot_features,
+            config.actions_per_chunk,
+            config.policy_device,
+        )
+        """
+        # khmin: client의 self.policy_config (RemotePolicyConfig instance)
         policy_specs = pickle.loads(request.data)  # nosec
 
         if not isinstance(policy_specs, RemotePolicyConfig):
@@ -140,6 +150,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.lerobot_features = policy_specs.lerobot_features
         self.actions_per_chunk = policy_specs.actions_per_chunk
 
+        # khmin: load policy class (from lerobot.policies.pi0.modeling_pi0 import PI0Policy)
         policy_class = get_policy_class(self.policy_type)
 
         start = time.perf_counter()

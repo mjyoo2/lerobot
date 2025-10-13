@@ -19,6 +19,10 @@ import shutil
 from collections.abc import Callable
 from pathlib import Path
 
+## hscho
+import re
+import random
+
 import datasets
 import numpy as np
 import packaging.version
@@ -496,6 +500,84 @@ class LeRobotDataset(torch.utils.data.Dataset):
             check_delta_timestamps(self.delta_timestamps, self.fps, self.tolerance_s)
             self.delta_indices = get_delta_indices(self.delta_timestamps, self.fps)
 
+        ## hscho - ============= get_joint-state statistics ===============
+        ## min, max original
+        # self.min_state_, self.max_state_ = self.get_state_min_and_max()
+
+        ## min = 상위 10%, max = 상위 90%
+        self.min_state, self.max_state = self.get_overall_state_top10_top90()
+        ## ======================== hscho =================================
+        self.is_sensor_state_noise_augmentation = True
+        self.is_instruction_augmentation = True
+
+        self.instruction_augmentation_sample_red = ["Pick up the red block and put it in the pink cup.",
+                                            "Grab the red block and place it into the pink cup.",
+                                            "Take the red block and drop it into the pink cup.",
+                                            "Lift the red block and set it inside the pink cup.",
+                                            "Pick up the red block and insert it into the pink cup.",
+                                            "Grasp the red block and put it into the pink cup.",
+                                            "Move the red block into the pink cup.",
+                                            "Transfer the red block to the pink cup.",
+                                            "Place the red block in the pink cup.",
+                                            "Put the red block into the pink cup."]
+        self.instruction_augmentation_sample_blue = ["Pick up the blue block and put it in the pink cup.",
+                                            "Grab the blue block and place it into the pink cup.",
+                                            "Take the blue block and drop it into the pink cup.",
+                                            "Lift the blue block and set it inside the pink cup.",
+                                            "Pick up the blue block and insert it into the pink cup.",
+                                            "Grasp the blue block and put it into the pink cup.",
+                                            "Move the blue block into the pink cup.",
+                                            "Transfer the blue block to the pink cup.",
+                                            "Place the blue block in the pink cup.",
+                                            "Put the blue block into the pink cup."]
+        self.instruction_augmentation_sample_green = ["Pick up the green block and put it in the pink cup.",
+                                            "Grab the green block and place it into the pink cup.",
+                                            "Take the green block and drop it into the pink cup.",
+                                            "Lift the green block and set it inside the pink cup.",
+                                            "Pick up the green block and insert it into the pink cup.",
+                                            "Grasp the green block and put it into the pink cup.",
+                                            "Move the green block into the pink cup.",
+                                            "Transfer the green block to the pink cup.",
+                                            "Place the green block in the pink cup.",
+                                            "Put the green block into the pink cup."]
+
+        ## =========================================================
+
+    def get_overall_state_top10_top90(self):
+        if self.hf_dataset is None:
+            return None, None
+
+        if "observation.state" not in self.hf_dataset.column_names:
+            return None, None
+
+        states = self.hf_dataset["observation.state"]
+        if len(states) == 0:
+            return None, None
+
+        def _to_numpy(value):
+            if isinstance(value, torch.Tensor):
+                return value.cpu().numpy()
+            return np.asarray(value)
+
+        stacked_states = np.stack([_to_numpy(state) for state in states], axis=0)
+        lower = np.percentile(stacked_states, 10, axis=0)
+        upper = np.percentile(stacked_states, 90, axis=0)
+
+        return lower, upper
+
+    def get_state_min_and_max(self):
+        min_state = None
+        max_state = None
+        for i in self.meta.episodes_stats.keys():
+            if min_state is None and max_state is None:
+                # array([-17.38594246, -98.98989868, -52.22121429, -99.40042877, 53.27933121, 1.32867134])
+                min_state = self.meta.episodes_stats[i]['observation.state']['min']
+                max_state = self.meta.episodes_stats[i]['observation.state']['max']
+            else:
+                min_state = np.minimum(min_state, self.meta.episodes_stats[i]['observation.state']['min'])
+                max_state = np.maximum(max_state, self.meta.episodes_stats[i]['observation.state']['max'])
+        return min_state, max_state 
+
     def push_to_hub(
         self,
         branch: str | None = None,
@@ -705,7 +787,6 @@ class LeRobotDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx) -> dict:
         item = self.hf_dataset[idx]
         ep_idx = item["episode_index"].item()
-
         query_indices = None
         if self.delta_indices is not None:
             query_indices, padding = self._get_query_indices(idx, ep_idx)
@@ -729,7 +810,76 @@ class LeRobotDataset(torch.utils.data.Dataset):
         task_idx = item["task_index"].item()
         item["task"] = self.meta.tasks[task_idx]
 
+        print('noise_augmentation_before:', item['observation.state'])
+        print('instruction_augmentation_before:', item['task'])
+        # =============================================
+        if self.is_sensor_state_noise_augmentation:
+            output = self.sensor_state_noise_augmentation(item['observation.state'])
+            item['observation.state'] = output
+
+        if self.is_instruction_augmentation:
+            output = self.instruction_augmentation(item['task'])
+            item['task'] = output
+        # =============================================
+        print('augmentation_after:', item['observation.state'])
+        print('instruction_augmentation_after:', item['task'])
+
         return item
+    
+    
+    # =============================================
+    ## hscho
+    def sensor_state_noise_augmentation(self, sensor_data):
+        """
+        Additive Gaussian noise augmentation for sensor_state.
+
+        Steps:
+        1) scale = max - min
+        2) coeff  = scale * 0.003
+        3) output = sensor_data + coeff * N(0, 1)
+
+        Works with shapes [D] or [B, D]. Keeps dtype/device.
+        """
+        if not isinstance(sensor_data, torch.Tensor):
+            sensor_data = torch.as_tensor(sensor_data)
+
+        device = sensor_data.device
+        dtype = sensor_data.dtype
+
+        scale_ = self.max_state - self.min_state  # minmax scalar
+        scale = torch.as_tensor(scale_, device=device, dtype=dtype).unsqueeze(0)
+
+        # 2) 계수
+        coeff = 0.003 * scale
+
+        # 3) 가우시안 노이즈 적용
+        noise = torch.randn_like(sensor_data)
+        return sensor_data + coeff * noise
+    
+    ## instruction augementation
+    def instruction_augmentation(self, task_instruction):
+        """Replace the incoming instruction with a color-matched augmentation sample."""
+        if not isinstance(task_instruction, str):
+            return task_instruction
+
+        # Randomly skip augmentation to preserve some original phrasing
+        if random.random() < 0.7:
+            return task_instruction
+
+        instruction_lower = task_instruction.lower()
+        sample_pool = None
+        if "red" in instruction_lower:
+            sample_pool = getattr(self, "instruction_augmentation_sample_red", None)
+        elif "blue" in instruction_lower:
+            sample_pool = getattr(self, "instruction_augmentation_sample_blue", None)
+        elif "green" in instruction_lower:
+            sample_pool = getattr(self, "instruction_augmentation_sample_green", None)
+
+        if not sample_pool:
+            return task_instruction
+
+        return random.choice(sample_pool)
+    # =============================================
 
     def __repr__(self):
         feature_keys = list(self.features)
